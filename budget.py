@@ -19,9 +19,10 @@ db_path = os.path.join(script_dir, "db.sqlite3")
 settings_path = os.path.join(script_dir, "settings.json")
 db = None
 
-take_home_salary = None 
+take_home_salary = None
 start_date = None
 end_date = None
+
 
 def main():
     load_settings()
@@ -40,14 +41,29 @@ def main():
         return args.prog_sub == sub or args.prog_sub == sub_alias
 
     if cpg("add", "a"):
-        add_transaction(args.cost, args.name, args.monthly, args.fixed, args.mark)
+        add_transaction(
+            args.cost,
+            args.name,
+            args.monthly,
+            args.fixed,
+            args.mark)
     elif cpg("list", "l"):
         list_transactions(args.marked)
     elif cpg("update", "u"):
-        update_transaction(args.name, args.newname, args.cost, args.monthly, args.fixed, args.mark, args.unmark)
+        update_transaction(
+            args.name,
+            args.newname,
+            args.cost,
+            args.monthly,
+            args.fixed,
+            args.mark,
+            args.unmark)
     elif cpg("monthly", "m"):
         if args.monthly_sub == "add":
-            create_monthly_category(args.name, args.costperitem, args.numitemspermonth)
+            create_monthly_category(
+                args.name,
+                args.costperitem,
+                args.numitemspermonth)
         else:
             list_monthly_expenses()
     elif cpg("fixed", "f"):
@@ -60,6 +76,7 @@ def main():
     else:
         print_dashboard()
 
+
 def load_settings():
     global take_home_salary, start_date, end_date
 
@@ -70,6 +87,7 @@ def load_settings():
     start_date = dateutil.parser.parse(settings["start_date"]).date()
     end_date = dateutil.parser.parse(settings["end_date"]).date()
 
+
 def print_dashboard():
     print_totals()
     print("")
@@ -79,23 +97,46 @@ def print_dashboard():
     print("")
     list_fixed_expenses()
 
-def print_totals():
-    (sum_spent, total_days, passed_days, daily_gain, percent_passed, percent_spent) = get_totals()
 
-    print("Total Spent: \033[1m%s\033[0m (%s)" % (fmtdlr(sum_spent), percent_spent))
+def print_totals():
+    (sum_spent, total_days, passed_days, daily_gain, percent_passed,
+     percent_spent, allocated_per_year) = get_totals()
+
+    print("Total Spent: \033[1m%s\033[0m (%s)" %
+          (fmtdlr(sum_spent), percent_spent))
+    print(
+        "Total Unallocated: %s" %
+        fmtdlr(
+            take_home_salary -
+            allocated_per_year))
     print("Days Passed: %s (%.1f%%)" % (passed_days, percent_passed))
+
 
 def get_totals():
     curs = db.cursor()
     sql = "SELECT SUM(cost) FROM transactions"
     sum_spent = curs.execute(sql).fetchone()[0]
+
+    sql = """
+        SELECT SUM(m.cost_per_item * m.num_items_per_month * 12) + f.cost
+        FROM monthly_expenses m, fixed_expenses f
+    """
+    allocated_per_year = curs.execute(sql).fetchone()[0]
     curs.close()
 
     (total_days, passed_days, daily_gain, percent_passed) = get_time_passed()
-    
-    percent_spent = percent_of(sum_spent, take_home_salary) 
 
-    return (sum_spent, total_days, passed_days, daily_gain, percent_passed, percent_spent)
+    percent_spent = percent_of(sum_spent, take_home_salary)
+
+    return (
+        sum_spent,
+        total_days,
+        passed_days,
+        daily_gain,
+        percent_passed,
+        percent_spent,
+        allocated_per_year)
+
 
 def get_time_passed():
     total_days = (end_date - start_date).days
@@ -104,48 +145,98 @@ def get_time_passed():
     percent_passed = round((passed_days / total_days) * 100, 2)
     return (total_days, passed_days, daily_gain, percent_passed)
 
+
 def get_argparser():
-    parser = argparse.ArgumentParser(prog='budget', description='Simple budget tracker')
+    parser = argparse.ArgumentParser(
+        prog='budget', description='Simple budget tracker')
 
     subs = parser.add_subparsers(help='sub-command help', dest='prog_sub')
 
     add_sub = subs.add_parser('add', help='add a transaction', aliases=['a'])
     add_sub.add_argument('cost', help='cost of the transaction')
     add_sub.add_argument('-n', '--name', help='name of the transaction')
-    add_sub.add_argument('-m', '--monthly', help='monthly category to associate with')
-    add_sub.add_argument('-f', '--fixed', help='fixed category to associate with')
-    add_sub.add_argument('-x', '--mark', help='mark this transaction to look at later')
+    add_sub.add_argument(
+        '-m',
+        '--monthly',
+        help='monthly category to associate with')
+    add_sub.add_argument(
+        '-f',
+        '--fixed',
+        help='fixed category to associate with')
+    add_sub.add_argument(
+        '-x',
+        '--mark',
+        help='mark this transaction to look at later')
 
-    remove_sub = subs.add_parser('remove', help='remove a transaction', aliases=['r'])
+    remove_sub = subs.add_parser(
+        'remove',
+        help='remove a transaction',
+        aliases=['r'])
     remove_sub.add_argument('name', help='name or id of transaction to remove')
 
-    update_sub = subs.add_parser('update', help='update a transaction', aliases=['u'])
+    update_sub = subs.add_parser(
+        'update',
+        help='update a transaction',
+        aliases=['u'])
     update_sub.add_argument('name', help='name of transaction to update')
     update_sub.add_argument('-n', '--newname', help='new name of transaction')
-    update_sub.add_argument('-c', '--cost', type=int, help='new cost of transaction')
+    update_sub.add_argument(
+        '-c',
+        '--cost',
+        type=int,
+        help='new cost of transaction')
     update_sub.add_argument('-m', '--monthly', help='monthly category to use')
     update_sub.add_argument('-f', '--fixed', help='fixed category to use')
-    update_sub.add_argument('-x', '--mark', action='store_true', help='mark this transaction to look at later')
-    update_sub.add_argument('-z', '--unmark', action='store_true', help='unmark this transaction')
+    update_sub.add_argument(
+        '-x', '--mark', action='store_true',
+        help='mark this transaction to look at later')
+    update_sub.add_argument(
+        '-z',
+        '--unmark',
+        action='store_true',
+        help='unmark this transaction')
 
-    import_sub = subs.add_parser('import', help='import a Chase CSV file', aliases=['i'])
-    import_sub.add_argument('csvfile', help='path to Chase CSV exported transaction')
-    import_sub.add_argument('-m', '--monthly', help='categorize all given items under'
+    import_sub = subs.add_parser(
+        'import',
+        help='import a Chase CSV file',
+        aliases=['i'])
+    import_sub.add_argument(
+        'csvfile',
+        help='path to Chase CSV exported transaction')
+    import_sub.add_argument(
+        '-m', '--monthly',
+        help='categorize all given items under'
         'this monthly category')
-    import_sub.add_argument('-f', '--fixed', help='category all given items under'
+    import_sub.add_argument(
+        '-f', '--fixed',
+        help='category all given items under'
         'this fixed category')
 
     list_sub = subs.add_parser('list', help='list transactions', aliases=['l'])
-    list_sub.add_argument('-x', '--marked', action='store_true', help='only list marked')
+    list_sub.add_argument(
+        '-x',
+        '--marked',
+        action='store_true',
+        help='only list marked')
 
-    monthly_sub = subs.add_parser('monthly', help='manage monthly transactions', aliases=['m'])
-    monthly_add_sub = monthly_sub.add_subparsers(dest='monthly_sub').add_parser('add', aliases=['a'])
+    monthly_sub = subs.add_parser(
+        'monthly',
+        help='manage monthly transactions',
+        aliases=['m'])
+    monthly_add_sub = monthly_sub.add_subparsers(
+        dest='monthly_sub').add_parser(
+        'add', aliases=['a'])
     monthly_add_sub.add_argument('name')
     monthly_add_sub.add_argument('costperitem', type=int)
     monthly_add_sub.add_argument('numitemspermonth', type=int)
 
-    fixed_sub = subs.add_parser('fixed', help='manage fixed transactions', aliases=['f'])
-    fixed_add_sub = fixed_sub.add_subparsers(dest='fixed_sub').add_parser('add', aliases=['a'])
+    fixed_sub = subs.add_parser(
+        'fixed',
+        help='manage fixed transactions',
+        aliases=['f'])
+    fixed_add_sub = fixed_sub.add_subparsers(
+        dest='fixed_sub').add_parser(
+        'add', aliases=['a'])
     fixed_add_sub.add_argument('name')
     fixed_add_sub.add_argument('cost', type=int)
     fixed_add_sub.add_argument('spent', nargs='?', default=0, type=int)
@@ -154,7 +245,13 @@ def get_argparser():
 
     return parser
 
-def add_transaction(cost, name=None, monthly_id=None, fixed_id=None, marked=False):
+
+def add_transaction(
+        cost,
+        name=None,
+        monthly_id=None,
+        fixed_id=None,
+        marked=False):
     curs = db.cursor()
 
     if monthly_id is not None:
@@ -179,7 +276,15 @@ def add_transaction(cost, name=None, monthly_id=None, fixed_id=None, marked=Fals
     db.commit()
     curs.close()
 
-def update_transaction(name, new_name=None, cost=None, monthly_id=None, fixed_id=None, mark=False, unmark=False):
+
+def update_transaction(
+        name,
+        new_name=None,
+        cost=None,
+        monthly_id=None,
+        fixed_id=None,
+        mark=False,
+        unmark=False):
     curs = db.cursor()
 
     (t_id, t_name) = get_transaction_id(name)
@@ -217,13 +322,14 @@ def update_transaction(name, new_name=None, cost=None, monthly_id=None, fixed_id
     params.append(t_id)
 
     if len(set_vals) > 0:
-        set_vals = set_vals[:-1] # take off trailing comma
+        set_vals = set_vals[:-1]  # take off trailing comma
         sql = sql % set_vals
         params = tuple(params)
         curs.execute(sql, params)
 
     db.commit()
     curs.close()
+
 
 def list_transactions(marked=False):
     curs = db.cursor()
@@ -234,7 +340,7 @@ def list_transactions(marked=False):
         where = ""
 
     sql = """
-        SELECT t.id, t.name, t.cost, m.name as monthly_name, f.name as fixed_name, t.time, t.marked 
+        SELECT t.id, t.name, t.cost, m.name as monthly_name, f.name as fixed_name, t.time, t.marked
         FROM transactions t
         LEFT JOIN monthly_expenses m ON m.id = t.monthly_expense_id
         LEFT JOIN fixed_expenses f ON f.id = t.fixed_expense_id
@@ -269,14 +375,18 @@ def list_transactions(marked=False):
 
     curs.close()
 
+
 def get_monthly_id(name):
     return _get_id_for_expense("monthly_expenses", name)
+
 
 def get_fixed_id(name):
     return _get_id_for_expense("fixed_expenses", name)
 
+
 def get_transaction_id(name):
     return _get_id_for_expense("transactions", name)
+
 
 def _get_id_for_expense(table_name, name):
     curs = db.cursor()
@@ -331,10 +441,11 @@ def create_monthly_category(name, cost_per_item, num_items_per_month):
     db.commit()
     curs.close()
 
+
 def list_monthly_expenses():
     curs = db.cursor()
-    sql = """ 
-        SELECT 
+    sql = """
+        SELECT
             m.name, cost_per_item, num_items_per_month,
             (cost_per_item * num_items_per_month) as total_per_month,
             (cost_per_item * num_items_per_month * 12) as total_per_year,
@@ -346,13 +457,13 @@ def list_monthly_expenses():
     """
     res = curs.execute(sql)
 
-    (_, _, _, daily_gain, percent_passed, _) = get_totals()
+    (_, _, _, daily_gain, percent_passed, _, _) = get_totals()
 
     rows = res.fetchall()
     table_data = []
     for row in rows:
-        (name, cost_per_item, num_items_per_month, total_per_month, \
-                total_per_year, spent) = row
+        (name, cost_per_item, num_items_per_month, total_per_month,
+         total_per_year, spent) = row
 
         percent_income = percent_of(total_per_year, take_home_salary)
 
@@ -365,8 +476,9 @@ def list_monthly_expenses():
         if cut_days < 0:
             cut_days *= -1
 
-        cut_time = babel.dates.format_timedelta(datetime.timedelta(days=cut_days), locale='en_US', \
-                threshold=2)
+        cut_time = babel.dates.format_timedelta(
+            datetime.timedelta(days=cut_days),
+            locale='en_US', threshold=2)
 
         if ahead:
             cut_days = "\033[32m+%s\033[0m" % cut_time
@@ -377,23 +489,33 @@ def list_monthly_expenses():
 
         percent_spent = "%.2f%%" % percent_spent
 
-        table_data.append([
-            name, fmtdlr(cost_per_item), num_items_per_month, fmtdlr(total_per_month),
-            fmtdlr(total_per_year), percent_income, fmtdlr(spent), percent_spent, cut_days
-        ])
+        table_data.append(
+            [name, fmtdlr(cost_per_item),
+             num_items_per_month, fmtdlr(total_per_month),
+             fmtdlr(total_per_year),
+             percent_income, fmtdlr(spent),
+             percent_spent, cut_days])
 
     headers = [
-        'Monthly Expenses', 'AvgCost/Item', 'Num/Mo', 'Ttl/Mo', 'Ttl/Yr', '%Income', 'Spent', '%Spent', 'Cut'
-    ]
+        'Monthly Expenses',
+        'AvgCost/Item',
+        'Num/Mo',
+        'Ttl/Mo',
+        'Ttl/Yr',
+        '%Income',
+        'Spent',
+        '%Spent',
+        'Cut']
     print(tabulate(table_data, headers=headers))
 
     curs.close()
 
+
 def list_fixed_expenses():
     curs = db.cursor()
-    sql = """ 
+    sql = """
         SELECT f.name, f.cost as fixed_cost, SUM(t.cost)
-        FROM fixed_expenses f 
+        FROM fixed_expenses f
         LEFT JOIN transactions t ON t.fixed_expense_id = f.id
         GROUP BY f.id
         ORDER BY f.cost DESC
@@ -411,13 +533,17 @@ def list_fixed_expenses():
 
     curs.close()
 
+
 def fmtdlr(dollar_amt, d=False):
     dollar_amt = dollar_amt or 0
-    return babel.numbers.format_currency(dollar_amt, 'USD', u'$#,##0', currency_digits=d)
+    return babel.numbers.format_currency(
+        dollar_amt, 'USD', u'$#,##0', currency_digits=d)
+
 
 def percent_of(val, total):
     dec = round((val / total) * 100, 2)
     return "%.2f%%" % dec
+
 
 def create_fixed_category(name, cost):
     curs = db.cursor()
@@ -432,6 +558,6 @@ def create_fixed_category(name, cost):
     db.commit()
     curs.close()
 
+
 if __name__ == "__main__":
     main()
-
