@@ -40,11 +40,11 @@ def main():
         return args.prog_sub == sub or args.prog_sub == sub_alias
 
     if cpg("add", "a"):
-        add_transaction(args.cost, args.name, args.monthly, args.fixed)
+        add_transaction(args.cost, args.name, args.monthly, args.fixed, args.mark)
     elif cpg("list", "l"):
-        list_transactions()
+        list_transactions(args.marked)
     elif cpg("update", "u"):
-        update_transaction(args.name, args.newname, args.cost, args.monthly, args.fixed)
+        update_transaction(args.name, args.newname, args.cost, args.monthly, args.fixed, args.mark, args.unmark)
     elif cpg("monthly", "m"):
         if args.monthly_sub == "add":
             create_monthly_category(args.name, args.costperitem, args.numitemspermonth)
@@ -72,6 +72,8 @@ def load_settings():
 
 def print_dashboard():
     print_totals()
+    print("")
+    list_transactions(True)
     print("")
     list_monthly_expenses()
     print("")
@@ -112,6 +114,7 @@ def get_argparser():
     add_sub.add_argument('-n', '--name', help='name of the transaction')
     add_sub.add_argument('-m', '--monthly', help='monthly category to associate with')
     add_sub.add_argument('-f', '--fixed', help='fixed category to associate with')
+    add_sub.add_argument('-x', '--mark', help='mark this transaction to look at later')
 
     remove_sub = subs.add_parser('remove', help='remove a transaction', aliases=['r'])
     remove_sub.add_argument('name', help='name or id of transaction to remove')
@@ -122,6 +125,8 @@ def get_argparser():
     update_sub.add_argument('-c', '--cost', type=int, help='new cost of transaction')
     update_sub.add_argument('-m', '--monthly', help='monthly category to use')
     update_sub.add_argument('-f', '--fixed', help='fixed category to use')
+    update_sub.add_argument('-x', '--mark', action='store_true', help='mark this transaction to look at later')
+    update_sub.add_argument('-z', '--unmark', action='store_true', help='unmark this transaction')
 
     import_sub = subs.add_parser('import', help='import a Chase CSV file', aliases=['i'])
     import_sub.add_argument('csvfile', help='path to Chase CSV exported transaction')
@@ -131,6 +136,7 @@ def get_argparser():
         'this fixed category')
 
     list_sub = subs.add_parser('list', help='list transactions', aliases=['l'])
+    list_sub.add_argument('-x', '--marked', action='store_true', help='only list marked')
 
     monthly_sub = subs.add_parser('monthly', help='manage monthly transactions', aliases=['m'])
     monthly_add_sub = monthly_sub.add_subparsers(dest='monthly_sub').add_parser('add', aliases=['a'])
@@ -148,7 +154,7 @@ def get_argparser():
 
     return parser
 
-def add_transaction(cost, name=None, monthly_id=None, fixed_id=None):
+def add_transaction(cost, name=None, monthly_id=None, fixed_id=None, marked=False):
     curs = db.cursor()
 
     if monthly_id is not None:
@@ -164,16 +170,16 @@ def add_transaction(cost, name=None, monthly_id=None, fixed_id=None):
         name = 'Existing' + empty_name + '-' + str(datetime.date.today())
 
     sql = """
-        INSERT INTO transactions (name, cost, monthly_expense_id, fixed_expense_id, time)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO transactions (name, cost, monthly_expense_id, fixed_expense_id, time, marked)
+        VALUES (?, ?, ?, ?, ?, ?)
     """
-    params = (name, cost, monthly_id, fixed_id, datetime.datetime.now())
+    params = (name, cost, monthly_id, fixed_id, datetime.datetime.now(), marked)
     curs.execute(sql, params)
 
     db.commit()
     curs.close()
 
-def update_transaction(name, new_name=None, cost=None, monthly_id=None, fixed_id=None):
+def update_transaction(name, new_name=None, cost=None, monthly_id=None, fixed_id=None, mark=False, unmark=False):
     curs = db.cursor()
 
     (t_id, t_name) = get_transaction_id(name)
@@ -203,6 +209,11 @@ def update_transaction(name, new_name=None, cost=None, monthly_id=None, fixed_id
         (fixed_id, _) = get_fixed_id(fixed_id)
         params.append(fixed_id)
 
+    if mark:
+        set_vals += " marked=1,"
+    elif unmark:
+        set_vals += " marked=0,"
+
     params.append(t_id)
 
     if len(set_vals) > 0:
@@ -214,25 +225,34 @@ def update_transaction(name, new_name=None, cost=None, monthly_id=None, fixed_id
     db.commit()
     curs.close()
 
-def list_transactions():
+def list_transactions(marked=False):
     curs = db.cursor()
 
+    if marked:
+        where = "WHERE marked=1"
+    else:
+        where = ""
+
     sql = """
-        SELECT t.id, t.name, t.cost, m.name as monthly_name, f.name as fixed_name, t.time 
+        SELECT t.id, t.name, t.cost, m.name as monthly_name, f.name as fixed_name, t.time, t.marked 
         FROM transactions t
         LEFT JOIN monthly_expenses m ON m.id = t.monthly_expense_id
         LEFT JOIN fixed_expenses f ON f.id = t.fixed_expense_id
+        %s
         ORDER BY time DESC
         LIMIT 15
-    """
+    """ % where
     res = curs.execute(sql)
 
     rows = res.fetchall()
     table_data = []
     for row in rows:
-        (row_id, name, cost, monthly_name, fixed_name, time) = row
+        (row_id, name, cost, monthly_name, fixed_name, time, marked) = row
+        marked = bool(marked)
 
         name = "%s (%d)" % (name, row_id)
+        if marked:
+            name = "\033[1m\033[94m%s\033[0m\033[0m" % name
 
         if monthly_name is not None:
             category = monthly_name
@@ -244,7 +264,8 @@ def list_transactions():
         table_data.append([name, cost, category, time])
 
     headers = ['Name', 'Cost', 'Category', 'Time']
-    print(tabulate(table_data, headers=headers))
+    if len(rows) > 0:
+        print(tabulate(table_data, headers=headers))
 
     curs.close()
 
@@ -362,7 +383,7 @@ def list_monthly_expenses():
         ])
 
     headers = [
-        'Name', 'AvgCost/Item', 'Num/Mo', 'Ttl/Mo', 'Ttl/Yr', '%Income', 'Spent', '%Spent', 'Cut'
+        'Monthly Expenses', 'AvgCost/Item', 'Num/Mo', 'Ttl/Mo', 'Ttl/Yr', '%Income', 'Spent', '%Spent', 'Cut'
     ]
     print(tabulate(table_data, headers=headers))
 
@@ -385,7 +406,7 @@ def list_fixed_expenses():
         (name, cost, spent) = row
         table_data.append([name, fmtdlr(cost), fmtdlr(spent)])
 
-    headers = ['Name', 'Cost', 'Spent']
+    headers = ['Fixed Expenses', 'Cost', 'Spent']
     print(tabulate(table_data, headers=headers))
 
     curs.close()
