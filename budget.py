@@ -1,10 +1,12 @@
 #!/usr/bin/python3
 
 import argparse
+import babel.dates
 import babel.numbers
 import datetime
 import dateutil.parser
 import json
+import math
 import os.path
 import sqlite3
 from tabulate import tabulate
@@ -76,19 +78,22 @@ def print_dashboard():
     list_fixed_expenses()
 
 def print_totals():
-    curs = db.cursor() 
+    (sum_spent, total_days, passed_days, daily_gain, percent_passed, percent_spent) = get_totals()
 
+    print("Total Spent: \033[1m%s\033[0m (%s)" % (fmtdlr(sum_spent), percent_spent))
+    print("Days Passed: %s (%.1f%%)" % (passed_days, percent_passed))
+
+def get_totals():
+    curs = db.cursor()
     sql = "SELECT SUM(cost) FROM transactions"
     sum_spent = curs.execute(sql).fetchone()[0]
+    curs.close()
 
     (total_days, passed_days, daily_gain, percent_passed) = get_time_passed()
     
     percent_spent = percent_of(sum_spent, take_home_salary) 
 
-    print("Total Spent: %s (%s)" % (fmtdlr(sum_spent), percent_spent))
-    print("Days Passed: %s (%.1f%%)" % (passed_days, percent_passed))
-
-    curs.close()
+    return (sum_spent, total_days, passed_days, daily_gain, percent_passed, percent_spent)
 
 def get_time_passed():
     total_days = (end_date - start_date).days
@@ -320,6 +325,9 @@ def list_monthly_expenses():
     """
     res = curs.execute(sql)
 
+    (_, _, _, daily_gain, percent_passed, _) = get_totals()
+    print("DAILY GAIN: %.2f / PERCENT PASSED: %.2f" % (daily_gain, percent_passed))
+
     rows = res.fetchall()
     table_data = []
     for row in rows:
@@ -328,13 +336,34 @@ def list_monthly_expenses():
 
         percent_income = percent_of(total_per_year, take_home_salary)
 
+        percent_spent = ((spent or 0) / total_per_year) * 100
+        cut_days = (percent_spent - percent_passed) / daily_gain
+        cut_days = math.ceil(cut_days)
+        ahead = cut_days < 0
+        behind = cut_days > 0
+
+        if cut_days < 0:
+            cut_days *= -1
+
+        cut_time = babel.dates.format_timedelta(datetime.timedelta(days=cut_days), locale='en_US', \
+                threshold=2)
+
+        if ahead:
+            cut_days = "\033[32m+%s\033[0m" % cut_time
+        elif behind:
+            cut_days = "\033[31m-%s\033[0m" % cut_time
+        else:
+            cut_days = cut_time
+
+        percent_spent = "%.2f%%" % percent_spent
+
         table_data.append([
             name, fmtdlr(cost_per_item), num_items_per_month, fmtdlr(total_per_month),
-            fmtdlr(total_per_year), percent_income, fmtdlr(spent)
+            fmtdlr(total_per_year), percent_income, fmtdlr(spent), percent_spent, cut_days
         ])
 
     headers = [
-        'Name', 'AvgCost/Item', 'Num/Month', 'Total/Month', 'Total/Year', 'Percent Income', 'Spent'
+        'Name', 'AvgCost/Item', 'Num/Mo', 'Ttl/Mo', 'Ttl/Yr', '%Income', 'Spent', '%Spent', 'Cut'
     ]
     print(tabulate(table_data, headers=headers))
 
@@ -367,8 +396,8 @@ def fmtdlr(dollar_amt, d=False):
     return babel.numbers.format_currency(dollar_amt, 'USD', u'$#,##0', currency_digits=d)
 
 def percent_of(val, total):
-    dec = round((val / total) * 100, 1)
-    return "%.1f%%" % dec
+    dec = round((val / total) * 100, 2)
+    return "%.2f%%" % dec
 
 def create_fixed_category(name, cost):
     curs = db.cursor()
