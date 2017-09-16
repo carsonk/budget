@@ -326,7 +326,6 @@ def list_monthly_expenses():
     res = curs.execute(sql)
 
     (_, _, _, daily_gain, percent_passed, _) = get_totals()
-    print("DAILY GAIN: %.2f / PERCENT PASSED: %.2f" % (daily_gain, percent_passed))
 
     rows = res.fetchall()
     table_data = []
