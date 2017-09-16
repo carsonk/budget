@@ -167,7 +167,7 @@ def add_transaction(cost, name=None, monthly_id=None, fixed_id=None, marked=Fals
             print("Please provide a name, or something to derive a useful name from!")
             return
 
-        name = 'Existing' + empty_name + '-' + str(datetime.date.today())
+        name = empty_name + '-' + str(datetime.date.today())
 
     sql = """
         INSERT INTO transactions (name, cost, monthly_expense_id, fixed_expense_id, time, marked)
