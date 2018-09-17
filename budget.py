@@ -114,14 +114,20 @@ def print_totals():
 
 def get_totals():
     curs = db.cursor()
-    sql = "SELECT SUM(cost) FROM transactions"
+    sql = "SELECT COALESCE(SUM(cost), 0) FROM transactions"
     sum_spent = curs.execute(sql).fetchone()[0]
 
     sql = """
-        SELECT SUM(m.cost_per_item * m.num_items_per_month * 12) + f.cost
-        FROM monthly_expenses m, fixed_expenses f
+        SELECT
+            COALESCE(SUM(m.cost_per_item * m.num_items_per_month * 12), 0)
+        FROM monthly_expenses m
     """
-    allocated_per_year = curs.execute(sql).fetchone()[0]
+    monthly_allocated_per_year = curs.execute(sql).fetchone()[0]
+
+    sql = """
+        SELECT COALESCE(SUM(f.cost), 0) FROM fixed_expenses f
+    """
+    fixed_allocated_per_year = curs.execute(sql).fetchone()[0]
     curs.close()
 
     (total_days, passed_days, daily_gain, percent_passed) = get_time_passed()
@@ -135,7 +141,7 @@ def get_totals():
         daily_gain,
         percent_passed,
         percent_spent,
-        allocated_per_year)
+        monthly_allocated_per_year + fixed_allocated_per_year)
 
 
 def get_time_passed():
