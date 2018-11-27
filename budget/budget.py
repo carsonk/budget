@@ -14,14 +14,25 @@ from yoyo import read_migrations, get_backend
 
 script_path = os.path.realpath(__file__)
 script_dir = os.path.dirname(script_path)
+home_path = os.path.expanduser('~')
 
-db_path = os.path.join(script_dir, "db.sqlite3")
-settings_path = os.path.join(script_dir, "settings.json")
+db_path = os.path.join(home_path, "cdbudget.db")
+settings_path = os.path.join(home_path, "cdbudget.config.json")
 db = None
 
 take_home_salary = None
 start_date = None
 end_date = None
+
+
+class NotFoundError(Exception):
+    pass
+
+
+def get_db_connection():
+    db = sqlite3.connect(db_path)
+    db.row_factory = sqlite3.Row
+    return db
 
 
 def main():
@@ -34,8 +45,7 @@ def main():
     migrations = read_migrations(os.path.join(script_dir, 'migrations'))
     backend.apply_migrations(backend.to_apply(migrations))
 
-    global db
-    db = sqlite3.connect(db_path)
+    db = get_db_connection()
 
     def cpg(sub, sub_alias):
         return args.prog_sub == sub or args.prog_sub == sub_alias
@@ -83,9 +93,12 @@ def load_settings():
     with open(settings_path, "r") as f:
         settings = json.load(f)
 
-    take_home_salary = settings["salary"]
+    take_home_salary_annual = settings["salary"]
     start_date = dateutil.parser.parse(settings["start_date"]).date()
     end_date = dateutil.parser.parse(settings["end_date"]).date()
+
+    total_days = (end_date - start_date).days
+    take_home_salary = (total_days / 365) * take_home_salary_annual
 
 
 def print_dashboard():
@@ -99,49 +112,53 @@ def print_dashboard():
 
 
 def print_totals():
-    (sum_spent, total_days, passed_days, daily_gain, percent_passed,
-     percent_spent, allocated_per_year) = get_totals()
+    t = get_totals(db)
 
+    print("Salary for Period: %s" % fmtdlr(t["take_home_salary"]))
+    print("Total Days: %d" % t["total_days"])
     print("Total Spent: \033[1m%s\033[0m (%s)" %
-          (fmtdlr(sum_spent), percent_spent))
+          (fmtdlr(t["sum_spent"]), t["percent_spent"]))
     print(
         "Total Unallocated: %s" %
         fmtdlr(
-            take_home_salary -
-            allocated_per_year))
-    print("Days Passed: %s (%.1f%%)" % (passed_days, percent_passed))
+            t["take_home_salary"] -
+            t["allocated_per_period"]))
+    print("Days Passed: %s (%.1f%%)" % (t["passed_days"], t["percent_passed"]))
 
 
-def get_totals():
+def get_totals(db):
+    num_months = (end_date - start_date).days / 30
+
     curs = db.cursor()
     sql = "SELECT COALESCE(SUM(cost), 0) FROM transactions"
     sum_spent = curs.execute(sql).fetchone()[0]
 
     sql = """
         SELECT
-            COALESCE(SUM(m.cost_per_item * m.num_items_per_month * 12), 0)
+            COALESCE(SUM(m.cost_per_item * m.num_items_per_month * %d), 0)
         FROM monthly_expenses m
-    """
-    monthly_allocated_per_year = curs.execute(sql).fetchone()[0]
+    """ % num_months
+    monthly_allocated_per_period = curs.execute(sql).fetchone()[0]
 
     sql = """
         SELECT COALESCE(SUM(f.cost), 0) FROM fixed_expenses f
     """
-    fixed_allocated_per_year = curs.execute(sql).fetchone()[0]
+    fixed_allocated_per_period = curs.execute(sql).fetchone()[0]
     curs.close()
 
     (total_days, passed_days, daily_gain, percent_passed) = get_time_passed()
 
     percent_spent = percent_of(sum_spent, take_home_salary)
 
-    return (
-        sum_spent,
-        total_days,
-        passed_days,
-        daily_gain,
-        percent_passed,
-        percent_spent,
-        monthly_allocated_per_year + fixed_allocated_per_year)
+    return {
+        'sum_spent': sum_spent,
+        'total_days': total_days,
+        'passed_days': passed_days,
+        'daily_gain': daily_gain,
+        'percent_passed': percent_passed,
+        'percent_spent': percent_spent,
+        'allocated_per_period': monthly_allocated_per_period + fixed_allocated_per_period
+    }
 
 
 def get_time_passed():
@@ -247,7 +264,7 @@ def get_argparser():
     fixed_add_sub.add_argument('cost', type=int)
     fixed_add_sub.add_argument('spent', nargs='?', default=0, type=int)
 
-    totals_sub = subs.add_parser('totals', help='print totals', aliases=['t'])
+    subs.add_parser('totals', help='print totals', aliases=['t'])
 
     return parser
 
@@ -261,9 +278,9 @@ def add_transaction(
     curs = db.cursor()
 
     if monthly_id is not None:
-        (monthly_id, empty_name) = get_monthly_id(monthly_id)
+        (monthly_id, empty_name) = get_monthly_id(monthly_id, db)
     elif fixed_id is not None:
-        (fixed_id, empty_name) = get_fixed_id(fixed_id)
+        (fixed_id, empty_name) = get_fixed_id(fixed_id, db)
 
     if name is None:
         if empty_name is None:
@@ -293,10 +310,9 @@ def update_transaction(
         unmark=False):
     curs = db.cursor()
 
-    (t_id, t_name) = get_transaction_id(name)
+    (t_id, _) = get_transaction_id(name, db)
     if t_id is None:
-        print("Could not get transaction ID for that given name")
-        return None
+        raise NotFoundError("Could not get transaction ID for that given name")
 
     params = []
 
@@ -313,11 +329,11 @@ def update_transaction(
 
     if monthly_id is not None:
         set_vals += " monthly_expense_id = ?, fixed_expense_id = NULL,"
-        (monthly_id, _) = get_monthly_id(monthly_id)
+        (monthly_id, _) = get_monthly_id(monthly_id, db)
         params.append(monthly_id)
     elif fixed_id is not None:
         set_vals += " fixed_expense_id = ?, monthly_expense_id = NULL,"
-        (fixed_id, _) = get_fixed_id(fixed_id)
+        (fixed_id, _) = get_fixed_id(fixed_id, db)
         params.append(fixed_id)
 
     if mark:
@@ -375,26 +391,32 @@ def list_transactions(marked=False):
 
         table_data.append([name, cost, category, time])
 
+    curs.close()
+
+    return table_data
+
+
+def print_transactions():
+    table_data = list_transactions()
+    
     headers = ['Name', 'Cost', 'Category', 'Time']
     if len(rows) > 0:
         print(tabulate(table_data, headers=headers))
 
-    curs.close()
+
+def get_monthly_id(name, db):
+    return _get_id_for_expense("monthly_expenses", name, db)
 
 
-def get_monthly_id(name):
-    return _get_id_for_expense("monthly_expenses", name)
+def get_fixed_id(name, db):
+    return _get_id_for_expense("fixed_expenses", name, db)
 
 
-def get_fixed_id(name):
-    return _get_id_for_expense("fixed_expenses", name)
+def get_transaction_id(name, db):
+    return _get_id_for_expense("transactions", name, db)
 
 
-def get_transaction_id(name):
-    return _get_id_for_expense("transactions", name)
-
-
-def _get_id_for_expense(table_name, name):
+def _get_id_for_expense(table_name, name, db):
     curs = db.cursor()
 
     try:
@@ -413,21 +435,17 @@ def _get_id_for_expense(table_name, name):
 
     if row is None:
         sql = "SELECT id, name FROM %s WHERE name LIKE ?" % table_name
-        args = ('%' + name + '%',)
         res = curs.execute(sql, ('%' + name + '%',))
 
         if res.arraysize == 1:
             row = res.fetchone()
         elif res.arraysize > 1:
-            print("Multiple line items were found with that search name!")
-            row = None
+            raise NotFoundError("Multiple line items were found with that search name!")
         else:
-            print("No items were found with that search name!")
-            row = None
+            raise NotFoundError("No items were found with that search name!")
 
     if row is None:
-        print("Nothing was found!")
-        return None
+        raise NotFoundError("Nothing was found!")
 
     curs.close()
 
@@ -448,7 +466,11 @@ def create_monthly_category(name, cost_per_item, num_items_per_month):
     curs.close()
 
 
-def list_monthly_expenses():
+def list_monthly_expenses(db):
+    """ Return [[name, cost_per_item, items_per_month, total_per_month,
+        total_per_year, percent_income, spent, percent_spent, cut_days]]
+    """
+
     curs = db.cursor()
     sql = """
         SELECT
@@ -463,7 +485,7 @@ def list_monthly_expenses():
     """
     res = curs.execute(sql)
 
-    (_, _, _, daily_gain, percent_passed, _, _) = get_totals()
+    totals = get_totals(db)
 
     rows = res.fetchall()
     table_data = []
@@ -474,7 +496,7 @@ def list_monthly_expenses():
         percent_income = percent_of(total_per_year, take_home_salary)
 
         percent_spent = ((spent or 0) / total_per_year) * 100
-        cut_days = (percent_spent - percent_passed) / daily_gain
+        cut_days = (percent_spent - totals["percent_passed"]) / totals["daily_gain"]
         cut_days = math.ceil(cut_days)
         ahead = cut_days < 0
         behind = cut_days > 0
@@ -502,22 +524,30 @@ def list_monthly_expenses():
              percent_income, fmtdlr(spent),
              percent_spent, cut_days])
 
-    headers = [
-        'Monthly Expenses',
-        'AvgCost/Item',
-        'Num/Mo',
-        'Ttl/Mo',
-        'Ttl/Yr',
-        '%Income',
-        'Spent',
-        '%Spent',
-        'Cut']
-    print(tabulate(table_data, headers=headers))
-
     curs.close()
 
+    return table_data
 
-def list_fixed_expenses():
+
+def print_fixed_expenses():
+    table_data = list_monthly_expenses(db)
+
+    headers = [
+            'Monthly Expenses',
+            'AvgCost/Item',
+            'Num/Mo',
+            'Ttl/Mo',
+            'Ttl/Yr',
+            '%Income',
+            'Spent',
+            '%Spent',
+            'Cut']
+    print(tabulate(table_data, headers=headers))
+
+
+def list_fixed_expenses(db):
+    """ Return [[name, cost, spent], ...] """
+
     curs = db.cursor()
     sql = """
         SELECT f.name, f.cost as fixed_cost, SUM(t.cost)
@@ -534,10 +564,15 @@ def list_fixed_expenses():
         (name, cost, spent) = row
         table_data.append([name, fmtdlr(cost), fmtdlr(spent)])
 
+    curs.close()
+
+    return table_data
+
+
+def print_fixed_expenses():
+    table_data = list_fixed_expenses(db)
     headers = ['Fixed Expenses', 'Cost', 'Spent']
     print(tabulate(table_data, headers=headers))
-
-    curs.close()
 
 
 def fmtdlr(dollar_amt, d=False):
