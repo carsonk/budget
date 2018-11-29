@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from flask import Flask, render_template, g
+from flask import Flask, render_template, g, request, redirect, url_for
 
 import budget
 from budget import fmtdlr
@@ -26,24 +26,41 @@ def create_app():
         t["sum_spent"] = fmtdlr(t["sum_spent"])
         t["total_unallocated"] = fmtdlr(budget.take_home_salary -
             t["allocated_per_period"])
-
+        
         context = {
             'take_home_salary': fmtdlr(budget.take_home_salary),
             'totals': t,
             'monthly_expenses': budget.list_monthly_expenses(g.db),
-            'fixed_expenses': budget.list_fixed_expenses(g.db)
+            'fixed_expenses': budget.list_fixed_expenses(g.db),
+            'transactions': budget.list_transactions(g.db)
         }
         return render_template('dashboard.html', **context)
 
-    @app.route('/monthly/add', methods=['POST'])
+    @app.route('/transaction/monthly/add', methods=['POST'])
     def add_monthly_exp():
         get_db()
-        return render_template('add_monthly.html')
 
-    @app.route('/fixed/add', methods=['POST'])
+        category = request.form.get('category')
+        name = request.form.get('name')
+        cost = int(request.form.get('cost'))
+
+        budget.add_transaction(g.db, cost, name, monthly_id=category)
+
+        redirect_url = url_for('dashboard') + "#add-m-t"
+        return redirect(redirect_url)
+
+    @app.route('/transaction/fixed/add', methods=['POST'])
     def add_fixed_exp():
         get_db()
-        return render_template('add_fixed.html')
+
+        category = request.form.get('category')
+        name = request.form.get('name')
+        cost = int(request.form.get('cost'))
+
+        budget.add_transaction(g.db, cost, name, fixed_id=category)
+
+        redirect_url = url_for('dashboard') + "#add-f-t"
+        return redirect(redirect_url)
 
     return app
 

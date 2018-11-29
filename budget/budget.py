@@ -36,6 +36,8 @@ def get_db_connection():
 
 
 def main():
+    global db
+
     load_settings()
 
     parser = get_argparser()
@@ -46,6 +48,8 @@ def main():
     backend.apply_migrations(backend.to_apply(migrations))
 
     db = get_db_connection()
+    if db is None:
+        raise RuntimeError("DB connection was none!")
 
     def cpg(sub, sub_alias):
         return args.prog_sub == sub or args.prog_sub == sub_alias
@@ -104,26 +108,26 @@ def load_settings():
 def print_dashboard():
     print_totals()
     print("")
-    list_transactions(True)
+    print_transactions()
     print("")
-    list_monthly_expenses()
+    print_monthly_expenses()
     print("")
-    list_fixed_expenses()
+    print_fixed_expenses()
 
 
 def print_totals():
     t = get_totals(db)
 
-    print("Salary for Period: %s" % fmtdlr(t["take_home_salary"]))
+    print("Salary for Period: %s" % fmtdlr(take_home_salary))
     print("Total Days: %d" % t["total_days"])
     print("Total Spent: \033[1m%s\033[0m (%s)" %
           (fmtdlr(t["sum_spent"]), t["percent_spent"]))
     print(
         "Total Unallocated: %s" %
         fmtdlr(
-            t["take_home_salary"] -
+            take_home_salary -
             t["allocated_per_period"]))
-    print("Days Passed: %s (%.1f%%)" % (t["passed_days"], t["percent_passed"]))
+    print("Days Passed: %s (%.1f%%) (%.1f%% months)" % (t["passed_days"], t["percent_passed"], t["num_months"]))
 
 
 def get_totals(db):
@@ -151,6 +155,7 @@ def get_totals(db):
     percent_spent = percent_of(sum_spent, take_home_salary)
 
     return {
+        'num_months': num_months,
         'sum_spent': sum_spent,
         'total_days': total_days,
         'passed_days': passed_days,
@@ -270,6 +275,7 @@ def get_argparser():
 
 
 def add_transaction(
+        db,
         cost,
         name=None,
         monthly_id=None,
@@ -353,7 +359,7 @@ def update_transaction(
     curs.close()
 
 
-def list_transactions(marked=False):
+def list_transactions(db, marked=False):
     curs = db.cursor()
 
     if marked:
@@ -376,20 +382,21 @@ def list_transactions(marked=False):
     table_data = []
     for row in rows:
         (row_id, name, cost, monthly_name, fixed_name, time, marked) = row
-        marked = bool(marked)
 
-        name = "%s (%d)" % (name, row_id)
-        if marked:
-            name = "\033[1m\033[94m%s\033[0m\033[0m" % name
+        d = dict(row)
+
+        d["marked"] = bool(marked)
 
         if monthly_name is not None:
-            category = monthly_name
+            d["category"] = monthly_name + " (Monthly)"
         elif fixed_name is not None:
-            category = fixed_name
+            d["category"] = fixed_name + " (Fixed)"
         else:
-            category = "[None]"
+            d["category"] = "[None]"
 
-        table_data.append([name, cost, category, time])
+        fmtdlr_keys(d, ["cost"])
+        
+        table_data.append(d)
 
     curs.close()
 
@@ -397,10 +404,10 @@ def list_transactions(marked=False):
 
 
 def print_transactions():
-    table_data = list_transactions()
+    table_data = list_transactions(db)
     
     headers = ['Name', 'Cost', 'Category', 'Time']
-    if len(rows) > 0:
+    if len(table_data) > 0:
         print(tabulate(table_data, headers=headers))
 
 
@@ -467,17 +474,13 @@ def create_monthly_category(name, cost_per_item, num_items_per_month):
 
 
 def list_monthly_expenses(db):
-    """ Return [[name, cost_per_item, items_per_month, total_per_month,
-        total_per_year, percent_income, spent, percent_spent, cut_days]]
-    """
-
     curs = db.cursor()
     sql = """
         SELECT
-            m.name, cost_per_item, num_items_per_month,
+            m.id, m.name, cost_per_item, num_items_per_month,
             (cost_per_item * num_items_per_month) as total_per_month,
             (cost_per_item * num_items_per_month * 12) as total_per_year,
-            SUM(t.cost) as spent
+            COALESCE(SUM(t.cost), 0) as spent
         FROM monthly_expenses m
         LEFT JOIN transactions t ON t.monthly_expense_id = m.id
         GROUP BY m.id
@@ -490,46 +493,42 @@ def list_monthly_expenses(db):
     rows = res.fetchall()
     table_data = []
     for row in rows:
-        (name, cost_per_item, num_items_per_month, total_per_month,
+        (id, name, cost_per_item, num_items_per_month, total_per_month,
          total_per_year, spent) = row
 
-        percent_income = percent_of(total_per_year, take_home_salary)
+        d = dict(row)
+        d["total_per_period"] = totals["num_months"] * total_per_month
+        d["percent_income"] = percent_of(total_per_year, take_home_salary)
 
         percent_spent = ((spent or 0) / total_per_year) * 100
         cut_days = (percent_spent - totals["percent_passed"]) / totals["daily_gain"]
         cut_days = math.ceil(cut_days)
-        ahead = cut_days < 0
-        behind = cut_days > 0
+        d["ahead"] = cut_days < 0
+        d["behind"] = cut_days > 0
 
         if cut_days < 0:
             cut_days *= -1
-
-        cut_time = babel.dates.format_timedelta(
+        
+        d["cut_days"] = babel.dates.format_timedelta(
             datetime.timedelta(days=cut_days),
             locale='en_US', threshold=2)
 
-        if ahead:
-            cut_days = "\033[32m+%s\033[0m" % cut_time
-        elif behind:
-            cut_days = "\033[31m-%s\033[0m" % cut_time
-        else:
-            cut_days = cut_time
+        d["percent_spent"] = "%.2f%%" % percent_spent
 
-        percent_spent = "%.2f%%" % percent_spent
+        fmt_keys = [
+            "cost_per_item", "total_per_month", "total_per_year",
+            "spent", "total_per_period"
+        ]
+        fmtdlr_keys(d, fmt_keys)
 
-        table_data.append(
-            [name, fmtdlr(cost_per_item),
-             num_items_per_month, fmtdlr(total_per_month),
-             fmtdlr(total_per_year),
-             percent_income, fmtdlr(spent),
-             percent_spent, cut_days])
+        table_data.append(d)
 
     curs.close()
 
     return table_data
 
 
-def print_fixed_expenses():
+def print_monthly_expenses():
     table_data = list_monthly_expenses(db)
 
     headers = [
@@ -550,7 +549,7 @@ def list_fixed_expenses(db):
 
     curs = db.cursor()
     sql = """
-        SELECT f.name, f.cost as fixed_cost, SUM(t.cost)
+        SELECT f.id, f.name, f.cost as fixed_cost, SUM(t.cost) as spent
         FROM fixed_expenses f
         LEFT JOIN transactions t ON t.fixed_expense_id = f.id
         GROUP BY f.id
@@ -561,8 +560,9 @@ def list_fixed_expenses(db):
     rows = res.fetchall()
     table_data = []
     for row in rows:
-        (name, cost, spent) = row
-        table_data.append([name, fmtdlr(cost), fmtdlr(spent)])
+        d = dict(row)
+        fmtdlr_keys(d, ["fixed_cost", "spent"])
+        table_data.append(d)
 
     curs.close()
 
@@ -579,6 +579,11 @@ def fmtdlr(dollar_amt, d=False):
     dollar_amt = dollar_amt or 0
     return babel.numbers.format_currency(
         dollar_amt, 'USD', u'$#,##0', currency_digits=d)
+
+
+def fmtdlr_keys(d, keys):
+    for k in keys:
+        d[k + "_fmt"] = fmtdlr(d[k])
 
 
 def percent_of(val, total):

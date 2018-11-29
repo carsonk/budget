@@ -6,18 +6,31 @@
         <script src="https://code.jquery.com/jquery-3.3.1.slim.min.js" integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo" crossorigin="anonymous"></script>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.3/umd/popper.min.js" integrity="sha384-ZMP7rVo3mIykV+2+9J3UJ46jBk0WLaUAdn689aCwoqbBJiSnjAK/l8WvCWPIPm49" crossorigin="anonymous"></script>
         <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.1.3/js/bootstrap.min.js" integrity="sha384-ChfqqxuZUCnJSK3+MXmPNIyE6ZbWh2IMqE241rYiqJxyMiZ6OW/JmZQ5stwEULTy" crossorigin="anonymous"></script>
+
+        <style type="text/css">
+            td.ahead {
+                color: green;
+                font-weight: bold;
+            }
+
+            td.behind {
+                color: red;
+                font-weight: bold;
+            }
+        </style>
     </head>
     <body>
         <div class="container">
             <div class="alert alert-dark">
                 <div class="row">
                     <div class="col-md text-center">
-                        <strong>Salary for Period:</strong>
+                        <strong>Take-home for Period:</strong>
                         {{ take_home_salary }}
                     </div>
                     <div class="col-md text-center">
                         <strong>Total Days:</strong>
                         {{ totals["total_days"] }}
+                        ({{ totals["num_months"] }} months)
                     </div>
                     <div class="col-md text-center">
                         <strong>Total Unallocated:</strong>
@@ -39,6 +52,35 @@
             </div>
 
             <h3>Monthly Expenses</h3>
+
+            <fieldset class="form-group" id="add-m-t">
+                <form method="POST" action="/transaction/monthly/add">
+                    <div class="row">
+                        <div class="col-md-3">
+                            <select class="form-control" name="category">
+                                {% for item in monthly_expenses %}
+                                    <option value="{{ item["id"] }}">
+                                        {{ item["name"] }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="col-md-4">
+                            <input class="form-control" name="name" placeholder="Name" />
+                        </div>
+
+                        <div class="col-md-2">
+                            <input class="form-control" type="number" name="cost" placeholder="Cost" />
+                        </div>
+                        
+                        <div class="col-md-2">
+                            <button type="submit" class="btn btn-primary">Add Monthly</button>
+                        </div>
+                    </div>
+                </form>
+            </fieldset>
+
             <table class="table table-striped table-sm">
                 <thead>
                     <tr>
@@ -46,7 +88,7 @@
                         <th>Avg. Cost/Item</th>
                         <th>Num/Mo.</th>
                         <th>Total/Mo.</th>
-                        <th>Total/Yr.</th>
+                        <th>Total/Pd.</th>
                         <th>%Income</th>
                         <th>Spent</th>
                         <th>%Spent</th>
@@ -55,22 +97,61 @@
                 </thead>
                 <tbody>
                     {% for item in monthly_expenses %}
+                        {% if item["ahead"] %}
+                            {% set cut_class = "ahead" %}
+                            {% set cut_sym = "+" %}
+                        {% elif item["behind"] %}
+                            {% set cut_class = "behind" %}
+                            {% set cut_sym = "-" %}
+                        {% else %}
+                            {% set cut_class = "" %}
+                            {% set cut_sym = "" %}
+                        {% endif %}
                         <tr>
-                            <td>{{ item[0] }}</td>
-                            <td>{{ item[1] }}</td>
-                            <td>{{ item[2] }}</td>
-                            <td>{{ item[3] }}</td>
-                            <td>{{ item[4] }}</td>
-                            <td>{{ item[5] }}</td>
-                            <td>{{ item[6] }}</td>
-                            <td>{{ item[7] }}</td>
-                            <td>{{ item[8] }}</td>
+                            <td>{{ item["name"] }}</td>
+                            <td>{{ item["cost_per_item_fmt"] }}</td>
+                            <td>{{ item["num_items_per_month"] }}</td>
+                            <td>{{ item["total_per_month_fmt"] }}</td>
+                            <td>{{ item["total_per_period_fmt"] }}</td>
+                            <td>{{ item["percent_income"] }}</td>
+                            <td>{{ item["spent_fmt"] }}</td>
+                            <td>{{ item["percent_spent"] }}</td>
+                            <td class="{{ cut_class }}">{{ cut_sym + item["cut_days"] }}</td>
                         </tr>
                     {% endfor %}
                 </tbody>
             </table>
-
+            
             <h3>Fixed Expenses</h3>
+
+            <fieldset class="form-group" id="add-f-t">
+                <form method="POST" action="/transaction/fixed/add">
+                    <div class="row">
+                        <div class="col-md-3">
+                            <select class="form-control" name="category">
+                                {% for item in fixed_expenses %}
+                                    <option value="{{ item["id"] }}">
+                                        {{ item["name"] }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="col-md-4">
+                            <input class="form-control" name="name" placeholder="Name" />
+                        </div>
+
+                        <div class="col-md-3">
+                            <input class="form-control" name="cost" placeholder="Cost" />
+                        </div>
+
+                        <div class="col-md-1">
+                            <button type="submit" class="btn btn-primary">Add Fixed</button>
+                        </div>
+                    </div>
+                </form>
+            </fieldset>
+
             <table class="table table-striped table-sm">
                 <thead>
                     <tr>
@@ -82,9 +163,29 @@
                 <tbody>
                     {% for item in fixed_expenses %}
                         <tr>
-                            <td>{{ item[0] }}</td>
-                            <td>{{ item[1] }}</td>
-                            <td>{{ item[2] }}</td>
+                            <td>{{ item["name"] }}</td>
+                            <td>{{ item["fixed_cost_fmt"] }}</td>
+                            <td>{{ item["spent_fmt"] }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+            <h2>Transactions</h2>
+            <table class="table table-striped table-sm">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Category</th>
+                        <th>Cost</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in transactions %}
+                        <tr>
+                            <td>{{ item["name"] }}</td>
+                            <td>{{ item["category"] }}</td>
+                            <td>{{ item["cost_fmt"] }}</td>
                         </tr>
                     {% endfor %}
                 </tbody>
