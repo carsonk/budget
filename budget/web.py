@@ -26,7 +26,7 @@ def create_app():
         t["sum_spent"] = fmtdlr(t["sum_spent"])
         t["total_unallocated"] = fmtdlr(budget.take_home_salary -
             t["allocated_per_period"])
-        
+
         context = {
             'take_home_salary': fmtdlr(budget.take_home_salary),
             'totals': t,
@@ -62,6 +62,15 @@ def create_app():
         redirect_url = url_for('dashboard') + "#add-f-t"
         return redirect(redirect_url)
 
+    @app.route('/transaction')
+    def list_transactions():
+        get_db()
+
+        context = {
+            'transactions': budget.list_transactions(g.db, count=None)
+        }
+        return render_template('transactions.html', **context)
+
     return app
 
 
@@ -69,6 +78,6 @@ if __name__ == "__main__":
     app = create_app()
 
     use_debugger = app.debug
-    
+
     app.run(use_debugger=use_debugger, debug=app.debug,
             use_reloader=use_debugger)
