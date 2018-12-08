@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 import argparse
 import babel.dates
@@ -359,13 +359,18 @@ def update_transaction(
     curs.close()
 
 
-def list_transactions(db, marked=False):
+def list_transactions(db, count=25, marked=False):
     curs = db.cursor()
 
     if marked:
         where = "WHERE marked=1"
     else:
         where = ""
+
+    if count is not None:
+        limit = "LIMIT %d" % int(count)
+    else:
+        limit = ""
 
     sql = """
         SELECT t.id, t.name, t.cost, m.name as monthly_name, f.name as fixed_name, t.time, t.marked
@@ -374,8 +379,8 @@ def list_transactions(db, marked=False):
         LEFT JOIN fixed_expenses f ON f.id = t.fixed_expense_id
         %s
         ORDER BY time DESC
-        LIMIT 15
-    """ % where
+        %s
+    """ % (where, limit)
     res = curs.execute(sql)
 
     rows = res.fetchall()
@@ -395,7 +400,7 @@ def list_transactions(db, marked=False):
             d["category"] = "[None]"
 
         fmtdlr_keys(d, ["cost"])
-        
+
         table_data.append(d)
 
     curs.close()
@@ -405,7 +410,7 @@ def list_transactions(db, marked=False):
 
 def print_transactions():
     table_data = list_transactions(db)
-    
+
     headers = ['Name', 'Cost', 'Category', 'Time']
     if len(table_data) > 0:
         print(tabulate(table_data, headers=headers))
@@ -508,7 +513,7 @@ def list_monthly_expenses(db):
 
         if cut_days < 0:
             cut_days *= -1
-        
+
         d["cut_days"] = babel.dates.format_timedelta(
             datetime.timedelta(days=cut_days),
             locale='en_US', threshold=2)
